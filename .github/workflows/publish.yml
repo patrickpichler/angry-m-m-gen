@@ -1,0 +1,40 @@
+name: Publish image
+
+# Builds the project with ko and publishes the container image to this
+# repository's GHCR: ghcr.io/<owner>/<repo> (tags: latest, sha-<short sha>).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Installs ko and, because KO_DOCKER_REPO is not preset, configures it
+      # to push to ghcr.io/<owner>/<repo> and logs in with the workflow token.
+      - name: Set up ko
+        uses: ko-build/setup-ko@v0.10
+
+      # --bare names the image exactly ghcr.io/<owner>/<repo>.
+      - name: Build and publish image
+        run: |
+          ko build . \
+            --bare \
+            --platform=linux/amd64,linux/arm64 \
+            --tags "latest,sha-${GITHUB_SHA::7}"
