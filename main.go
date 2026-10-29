@@ -6,8 +6,9 @@
 // outline, centered horizontally and pinned near the bottom edge. A
 // <br/> (or <br>) in the message starts a new line. An optional
 // grain=<0-100> parameter degrades the base image with JPEG re-compression
-// artifacts under the text. An optional invert flag flips the base
-// image's colors.
+// artifacts under the text. The optional invert flag flips the base
+// image's colors, and the optional deepfry flag applies the deep-fried
+// meme look (heavy contrast, saturation and a red/orange shift).
 package main
 
 import (
@@ -143,7 +144,7 @@ func usageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintln(w, "angry-mm-generator — GET /image?message=<text> returns a PNG meme (<br/> breaks lines, &grain=<0-100> deep-fries, &invert flips colors)")
+	fmt.Fprintln(w, "angry-mm-generator — GET /image?message=<text> returns a PNG meme (<br/> breaks lines, &grain=<0-100> adds jpeg artifacts, &invert inverts colors, &deepfry deep-fries)")
 }
 
 func imageHandler(w http.ResponseWriter, r *http.Request) {
@@ -169,38 +170,64 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	invert := false
-	if r.URL.Query().Has("invert") {
-		switch strings.ToLower(r.URL.Query().Get("invert")) {
-		case "", "1", "true", "yes", "on":
-			invert = true
-		case "0", "false", "no", "off":
-			invert = false
-		default:
-			http.Error(w, "invert must be a boolean (true/false, 1/0, on/off, yes/no)", http.StatusBadRequest)
-			return
-		}
+	deepfry, err := boolFlag(r, "deepfry")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	invert, err := boolFlag(r, "invert")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	out := render(lines, grain, invert)
+	out := render(lines, filters{grain: grain, invert: invert, deepfry: deepfry})
 	w.Header().Set("Content-Type", "image/png")
 	if err := png.Encode(w, out); err != nil {
 		log.Printf("png encode: %v", err)
 	}
 }
 
+// boolFlag parses the optional boolean query parameter name: a bare
+// parameter (?name) or true/1/on/yes (any casing) is true,
+// false/0/off/no is false, anything else is an error. Absent means false.
+func boolFlag(r *http.Request, name string) (bool, error) {
+	if !r.URL.Query().Has(name) {
+		return false, nil
+	}
+	switch strings.ToLower(r.URL.Query().Get(name)) {
+	case "", "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be a boolean (true/false, 1/0, on/off, yes/no)", name)
+	}
+}
+
+// filters holds the optional base-image effects applied before the
+// caption is drawn.
+type filters struct {
+	grain   float64 // JPEG artifact strength, 0 = off
+	invert  bool    // flip colours
+	deepfry bool    // deep-fried meme look
+}
+
 // render returns a fresh copy of the base image with lines drawn on it.
-// The base image is filtered first: invert flips its colors, grain > 0
-// adds JPEG artifacts — the caption is drawn on top and stays crisp.
-func render(lines []string, grain float64, invert bool) *image.RGBA {
+// The base image is filtered first — deepfry, then invert, then grain —
+// and the caption is drawn on top, staying crisp.
+func render(lines []string, f filters) *image.RGBA {
 	src := baseImg.Bounds()
 	dst := image.NewRGBA(image.Rect(0, 0, src.Dx(), src.Dy()))
 	draw.Draw(dst, dst.Bounds(), baseImg, src.Min, draw.Src)
 
-	if invert {
+	if f.deepfry {
+		deepFry(dst)
+	}
+	if f.invert {
 		invertColors(dst)
 	}
-	jpegArtifacts(dst, grain)
+	jpegArtifacts(dst, f.grain)
 
 	size, lines := layout(lines, dst.Bounds())
 	drawText(dst, lines, size, dst.Bounds())
@@ -246,6 +273,47 @@ func invertColors(m *image.RGBA) {
 		m.Pix[i+1] = 255 - m.Pix[i+1]
 		m.Pix[i+2] = 255 - m.Pix[i+2]
 	}
+}
+
+// deepFry applies the classic deep-fried meme look to m in place: heavy
+// contrast and saturation boosts plus a red/orange channel shift. Pairs
+// best with grain on top for the full crunchy effect.
+func deepFry(m *image.RGBA) {
+	const (
+		contrast   = 1.8  // around mid-grey
+		saturation = 2.2  // around luminance
+		redShift   = 1.35 // channel multipliers skew toward
+		greenShift = 1.05 // frying-pan orange
+		blueShift  = 0.75
+	)
+	for i := 0; i < len(m.Pix); i += 4 {
+		r := float64(m.Pix[i+0]) / 255
+		g := float64(m.Pix[i+1]) / 255
+		b := float64(m.Pix[i+2]) / 255
+
+		r = (r-0.5)*contrast + 0.5
+		g = (g-0.5)*contrast + 0.5
+		b = (b-0.5)*contrast + 0.5
+
+		luma := 0.299*r + 0.587*g + 0.114*b
+		r = luma + (r-luma)*saturation
+		g = luma + (g-luma)*saturation
+		b = luma + (b-luma)*saturation
+
+		m.Pix[i+0] = clampByte(r * redShift * 255)
+		m.Pix[i+1] = clampByte(g * greenShift * 255)
+		m.Pix[i+2] = clampByte(b * blueShift * 255)
+	}
+}
+
+func clampByte(v float64) uint8 {
+	if v <= 0 {
+		return 0
+	}
+	if v >= 255 {
+		return 255
+	}
+	return uint8(v + 0.5)
 }
 
 func faceFor(size float64) font.Face {

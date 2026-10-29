@@ -7,7 +7,7 @@ angry emoji, classic meme style.
 
 ```sh
 go build .
-./angry-mm-generator --addr :8080 --image assets/base.jpg
+./angry-mm-generator --addr :8080
 ```
 
 Then:
@@ -17,6 +17,7 @@ curl -G -o meme.png --data-urlencode "message=PATRICK" http://localhost:8080/ima
 curl -G -o meme.png --data-urlencode "message=ANGRY<br/>MM" http://localhost:8080/image
 curl -G -o meme.png --data-urlencode "message=PATRICK" --data-urlencode "grain=10" http://localhost:8080/image
 curl -G -o meme.png --data-urlencode "message=PATRICK" --data-urlencode "invert" http://localhost:8080/image
+curl -G -o meme.png --data-urlencode "message=PATRICK" --data-urlencode "deepfry" --data-urlencode "grain=40" http://localhost:8080/image
 ```
 
 ## Container image
@@ -44,8 +45,13 @@ lines from consecutive breaks are dropped). `grain=<0-100>` degrades the
 base image with real JPEG re-compression artifacts before the text is
 drawn — the caption stays crisp. Higher values mean lower JPEG quality:
 subtle blocking around ~10, clearly crunchy around ~40, full repost-mush
-at 100; invalid or out-of-range values return 400. Missing/empty
-`message` returns 400.
+at 100; invalid or out-of-range values return 400. `invert` and `deepfry`
+are boolean flags with the same syntax (bare param, `true|1|on|yes` vs
+`false|0|off|no`, case-insensitive, anything else → 400): `invert` flips
+the base image's colors (white→black, red→teal), `deepfry` applies the
+deep-fried meme look — heavy contrast, blown-out saturation and a
+red/orange shift; combine it with `grain` for the full crunchy effect.
+Missing/empty `message` returns 400.
 
 ## Flags
 
@@ -56,10 +62,13 @@ completions).
 | flag | shorthand | default | description |
 |--------|-----|-----------------|------------------------|
 | `--addr` | `-a` | `:8080` | listen address |
-| `--image` | `-i` | `assets/base.jpg` | path to the base image |
+| `--image` | `-i` | embedded copy | path to a base image on disk (optional) |
 
 ## Notes
 
+- Both the Impact font and the base image are embedded from `assets/` at
+  build time — the binary (and the container image) is fully
+  self-contained; `--image` only overrides the embedded copy.
 - The Impact font is embedded from `assets/Impact.ttf` (copied from macOS
   system fonts). Impact is a Microsoft-licensed typeface — fine for personal
   and joke use, but if you distribute this somewhere serious, swap in an
